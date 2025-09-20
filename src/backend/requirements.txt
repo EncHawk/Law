@@ -1,24 +1,19 @@
-# Web framework
+# --- Core Web Framework ---
 fastapi==0.111.0
 uvicorn[standard]==0.30.1
-
-# Data validation
+python-dotenv==1.0.1
 pydantic==2.8.2
 
-# PDF + DOCX parsing
-pypdf==4.2.0
-python-docx>=1.1.12
+# --- Document Processing ---
+pypdf==4.3.1
+python-docx==1.1.2
 
-# Google GenAI integration
-langchain-google-genai==2.1.12
+# --- LangChain Stack ---
+# Core library and community integrations
+langchain==0.2.10
+langchain-community==0.2.10
+# Google Gemini integration for LLMs and embeddings
+langchain-google-genai==1.0.7
 
-# LlamaIndex & related (make sure using latest or compatible)
-llama-index-core>=0.11.20
-llama-index-embeddings-langchain>=0.1.6
-llama-index-vector-stores-chroma>=0.1.9
-
-# ChromaDB
-chromadb==1.1.0
-
-# Utils
-python-multipart==0.0.9
+# --- Vector Database ---
+chromadb==0.5.4

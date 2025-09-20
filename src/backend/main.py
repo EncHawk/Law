@@ -1,103 +1,76 @@
 """
-Legal Translator AI - Backend API
-FastAPI backend with Google Gemini and RAG pipeline using ChromaDB
+Legal Translator app with RAG->
+FastAPI backend with Google Gemini and RAG pipeline using ChromaDB and LangChain
 """
-from  dotenv import load_dotenv
+from dotenv import load_dotenv
 import os
-import json
 import hashlib
-from typing import List, Dict, Optional, Any
+from typing import List
 from pathlib import Path
 import shutil
 from datetime import datetime
+import traceback
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Document processing
 import pypdf
 from docx import Document as DocxDocument
-import tempfile
 
-# LangChain and LlamaIndex
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from llama_index.core import (
-    Document,
-    VectorStoreIndex,
-    StorageContext,
-    Settings,
-    ServiceContext,
-)
-from llama_index.core.node_parser import SimpleNodeParser
-from llama_index.core.text_splitter import TokenTextSplitter
-from llama_index.vector_stores.chroma import ChromaVectorStore
-from llama_index.core.retrievers import VectorIndexRetriever
-from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.core.response_synthesizers import ResponseMode
-from llama_index.embeddings.langchain import LangchainEmbedding
+# --- LangChain Core Imports ---
+from langchain_community.vectorstores import Chroma
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
-# ChromaDB
+# --- LangChain Google Imports ---
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+
+# --- ChromaDB Client ---
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
 load_dotenv()
 
-# Environment setup
+# --- Environment and App Setup ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     raise ValueError("Please set GOOGLE_API_KEY environment variable")
 
-# Initialize FastAPI app
-app = FastAPI(title="Legal Translator AI", version="1.0.0")
-
-# Configure CORS
+app = FastAPI(title="Legal Translator AI", version="2.1.0-fixed")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-# Initialize directories
+# --- Directory and DB Initialization ---
 UPLOAD_DIR = Path("uploads")
 CHROMA_DIR = Path("chroma_db")
 UPLOAD_DIR.mkdir(exist_ok=True)
 CHROMA_DIR.mkdir(exist_ok=True)
 
-# Initialize ChromaDB client
 chroma_client = chromadb.PersistentClient(
     path=str(CHROMA_DIR),
     settings=ChromaSettings(anonymized_telemetry=False)
 )
 
-# Initialize Google AI models
-embeddings_model = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004",
-    google_api_key=GOOGLE_API_KEY
-)
-
+# --- LangChain AI Model Configuration ---
 llm = ChatGoogleGenerativeAI(
     model="gemini-1.5-flash",
     google_api_key=GOOGLE_API_KEY,
-    temperature=0.3,
+    temperature=0.2,
     max_output_tokens=2048,
 )
 
-# Wrap embeddings for LlamaIndex
-langchain_embedding = LangchainEmbedding(embeddings_model)
+embeddings_model = GoogleGenerativeAIEmbeddings(
+    model="models/text-embedding-004", google_api_key=GOOGLE_API_KEY
+)
 
-# Configure LlamaIndex settings
-Settings.embed_model = langchain_embedding
-Settings.chunk_size = 512
-Settings.chunk_overlap = 50
-
-# Storage for document indices
-document_indices: Dict[str, VectorStoreIndex] = {}
-
-# Pydantic models
+# --- Pydantic Models ---
 class QuestionRequest(BaseModel):
     filename: str
     question: str
@@ -116,369 +89,341 @@ class AnswerResponse(BaseModel):
     sources: List[str]
 
 class RiskClause(BaseModel):
-    clause_type: str
-    text: str
-    explanation: str
-    severity: str  # high, medium, low
+    clause_type: str = Field(description="The type of legal clause, e.g., 'Termination', 'Limitation of Liability'.")
+    text: str = Field(description="The exact text of the clause from the document (max 200 chars).")
+    explanation: str = Field(description="A plain English explanation of what the clause means and its risks.")
+    severity: str = Field(description="A risk severity rating: 'high', 'medium', or 'low'.")
 
 class ScanResponse(BaseModel):
     risks: List[RiskClause]
     total_risks: int
 
-# Utility functions
-def extract_text_from_pdf(file_path: Path) -> str:
-    """Extract text from PDF file"""
-    text = ""
-    try:
-        with open(file_path, 'rb') as file:
-            pdf_reader = pypdf.PdfReader(file)
-            for page_num in range(len(pdf_reader.pages)):
-                page = pdf_reader.pages[page_num]
-                text += page.extract_text() + "\n"
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading PDF: {str(e)}")
-    return text
+# --- Utility Functions ---
+def get_collection_name(filename: str) -> str:
+    """Creates a consistent, valid collection name from a filename."""
+    return hashlib.md5(filename.encode()).hexdigest()
 
-def extract_text_from_docx(file_path: Path) -> str:
-    """Extract text from DOCX file"""
-    text = ""
-    try:
-        doc = DocxDocument(file_path)
-        for paragraph in doc.paragraphs:
-            text += paragraph.text + "\n"
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading DOCX: {str(e)}")
-    return text
-
-def extract_text_from_txt(file_path: Path) -> str:
-    """Extract text from TXT file"""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            return file.read()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading TXT: {str(e)}")
-
-def process_document(file_path: Path, filename: str) -> str:
-    """Process document based on file extension"""
+def extract_text(file_path: Path) -> str:
+    """Extracts text from various document types."""
     extension = file_path.suffix.lower()
-    
-    if extension == '.pdf':
-        return extract_text_from_pdf(file_path)
-    elif extension in ['.docx', '.doc']:
-        return extract_text_from_docx(file_path)
-    elif extension == '.txt':
-        return extract_text_from_txt(file_path)
-    else:
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {extension}")
-
-def create_vector_index(text: str, filename: str) -> VectorStoreIndex:
-    """Create vector index from document text"""
-    # Create collection name from filename (ChromaDB requirement)
-    collection_name = hashlib.md5(filename.encode()).hexdigest()[:63]
-    
-    # Check if collection exists, delete if it does
+    text = ""
     try:
-        chroma_client.delete_collection(name=collection_name)
-    except:
-        pass  # Collection doesn't exist, which is fine
-    
-    # Create new collection
-    collection = chroma_client.create_collection(
-        name=collection_name,
-        metadata={"filename": filename}
-    )
-    
-    # Create ChromaDB vector store
-    vector_store = ChromaVectorStore(chroma_collection=collection)
-    
-    # Create storage context
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-    
-    # Split text into chunks
-    text_splitter = TokenTextSplitter(
-        chunk_size=512,
-        chunk_overlap=50,
-        separator="\n"
-    )
-    chunks = text_splitter.split_text(text)
-    
-    # Create documents from chunks
-    documents = [Document(text=chunk) for chunk in chunks]
-    
-    # Create index
-    index = VectorStoreIndex.from_documents(
-        documents,
-        storage_context=storage_context,
-        show_progress=True
-    )
-    
-    return index
-
-def get_or_create_index(filename: str) -> VectorStoreIndex:
-    """Get existing index or raise error"""
-    if filename not in document_indices:
-        # Try to load from ChromaDB
-        collection_name = hashlib.md5(filename.encode()).hexdigest()[:63]
-        try:
-            collection = chroma_client.get_collection(name=collection_name)
-            vector_store = ChromaVectorStore(chroma_collection=collection)
-            storage_context = StorageContext.from_defaults(vector_store=vector_store)
-            index = VectorStoreIndex.from_vector_store(
-                vector_store,
-                storage_context=storage_context
-            )
-            document_indices[filename] = index
-        except:
-            raise HTTPException(status_code=404, detail=f"Document '{filename}' not found. Please upload it first.")
-    
-    return document_indices[filename]
-
-def identify_risky_clauses(text: str) -> List[RiskClause]:
-    """Use Gemini to identify risky clauses in legal document"""
-    prompt = f"""
-    You are a legal expert analyzing a contract or legal document. Your task is to identify potentially risky or important clauses that a non-lawyer should be aware of.
-    
-    Document text:
-    {text[:8000]}  # Limit to avoid token limits
-    
-    Please identify and extract the following types of clauses if present:
-    1. Indemnification/Hold Harmless clauses
-    2. Limitation of Liability clauses
-    3. Arbitration/Dispute Resolution clauses
-    4. Termination clauses
-    5. Confidentiality/Non-disclosure clauses
-    6. Non-compete clauses
-    7. Warranty disclaimers
-    8. Payment/Fee escalation clauses
-    9. Auto-renewal clauses
-    10. Governing law/Jurisdiction clauses
-    
-    For each risky clause found, provide:
-    - The type of clause
-    - The exact text (keep it concise, max 200 characters)
-    - A plain English explanation of what it means and why it matters
-    - Severity level (high/medium/low)
-    
-    Return the response as a valid JSON array with objects containing: clause_type, text, explanation, severity.
-    If no risky clauses are found, return an empty array [].
-    
-    JSON Response:
-    """
-    
-    try:
-        response = llm.invoke(prompt)
-        content = response.content
-        
-        # Extract JSON from response
-        if "```json" in content:
-            json_str = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            json_str = content.split("```")[1].split("```")[0].strip()
+        if extension == '.pdf':
+            with open(file_path, 'rb') as f:
+                reader = pypdf.PdfReader(f)
+                for page in reader.pages:
+                    text += page.extract_text() or ""
+        elif extension in ['.docx', '.doc']:
+            doc = DocxDocument(file_path)
+            for para in doc.paragraphs:
+                text += para.text + "\n"
+        elif extension == '.txt':
+            text = file_path.read_text(encoding='utf-8')
         else:
-            json_str = content.strip()
-        
-        # Parse JSON
-        try:
-            risks_data = json.loads(json_str)
-            if not isinstance(risks_data, list):
-                risks_data = []
-        except json.JSONDecodeError:
-            # Fallback to empty list if parsing fails
-            risks_data = []
-        
-        # Convert to RiskClause objects
-        risks = []
-        for risk in risks_data:
-            if isinstance(risk, dict):
-                risks.append(RiskClause(
-                    clause_type=risk.get("clause_type", "Unknown"),
-                    text=risk.get("text", "")[:200],  # Limit text length
-                    explanation=risk.get("explanation", "No explanation available"),
-                    severity=risk.get("severity", "medium")
-                ))
-        
-        return risks
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {extension}")
     except Exception as e:
-        print(f"Error identifying risky clauses: {str(e)}")
-        return []
+        raise HTTPException(status_code=500, detail=f"Error reading {file_path.name}: {e}")
+    return text
 
-# API Endpoints
+# --- API Endpoints ---
 @app.get("/")
-async def root():
-    """Root endpoint"""
-    return {"message": "Legal Translator AI API is running", "version": "1.0.0"}
+def root():
+    return {"message": "Legal Translator AI API (LangChain Edition) is running"}
 
 @app.post("/upload", response_model=UploadResponse)
 async def upload_document(file: UploadFile = File(...)):
-    """Upload and process a legal document"""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
-    
-    # Check file extension
-    allowed_extensions = ['.pdf', '.docx', '.doc', '.txt']
-    file_extension = Path(file.filename).suffix.lower()
-    if file_extension not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File type {file_extension} not supported. Allowed types: {', '.join(allowed_extensions)}"
-        )
-    
-    # Save uploaded file
+
     file_path = UPLOAD_DIR / file.filename
     try:
-        with open(file_path, "wb") as buffer:
+        with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error saving file: {str(e)}")
     finally:
         file.file.close()
-    
-    # Extract text from document
+
     try:
-        text = process_document(file_path, file.filename)
-        if not text or len(text.strip()) < 10:
-            raise HTTPException(status_code=400, detail="Document appears to be empty or unreadable")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
-    
-    # Create vector index
-    try:
-        index = create_vector_index(text, file.filename)
-        document_indices[file.filename] = index
+        # 1. Extract text
+        text = extract_text(file_path)
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="Document is empty or unreadable.")
+
+        # 2. Split text into chunks (list of strings)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        chunks = text_splitter.split_text(text)
+        if not chunks:
+            raise HTTPException(status_code=400, detail="Could not extract any text chunks from the document.")
         
-        # Get number of chunks created
-        collection_name = hashlib.md5(file.filename.encode()).hexdigest()[:63]
-        collection = chroma_client.get_collection(name=collection_name)
-        num_chunks = collection.count()
-        
+        # 3. Create a metadata dictionary for each chunk
+        metadatas = [{"filename": file.filename}] * len(chunks)
+
+        # 4. Create or replace the ChromaDB collection
+        collection_name = get_collection_name(file.filename)
+        try:
+            chroma_client.delete_collection(name=collection_name)
+        except Exception:
+            pass  # Collection didn't exist, which is fine
+
+        # 5. Use Chroma.from_texts to create embeddings and add to the DB
+        # This is the key fix: It uses raw text and metadata, avoiding the
+        # problematic LangChain Document object serialization.
+        Chroma.from_texts(
+            texts=chunks,
+            embedding=embeddings_model,
+            metadatas=metadatas,
+            client=chroma_client,
+            collection_name=collection_name,
+        )
+
         return UploadResponse(
             success=True,
             filename=file.filename,
-            message=f"Document processed successfully. Created {num_chunks} text chunks.",
-            chunks_created=num_chunks
+            message=f"'{file.filename}' processed. Created {len(chunks)} chunks.",
+            chunks_created=len(chunks),
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating vector index: {str(e)}")
+        # Log the full traceback for better debugging
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error indexing document: {str(e)}")
 
 @app.post("/ask", response_model=AnswerResponse)
 async def ask_question(request: QuestionRequest):
-    """Answer a question based on the uploaded document using RAG"""
-    if not request.question or len(request.question.strip()) < 3:
-        raise HTTPException(status_code=400, detail="Question is too short or empty")
-    
-    # Get document index
+    collection_name = get_collection_name(request.filename)
     try:
-        index = get_or_create_index(request.filename)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error loading document: {str(e)}")
+        # 1. Load the existing vector store
+        vector_store = Chroma(
+            client=chroma_client,
+            collection_name=collection_name,
+            embedding_function=embeddings_model,
+        )
+        retriever = vector_store.as_retriever(search_kwargs={'k': 5})
+    except Exception:
+        # A more robust check to see if the collection actually exists
+        existing_collections = [c.name for c in chroma_client.list_collections()]
+        if collection_name not in existing_collections:
+             raise HTTPException(status_code=404, detail=f"Index for '{request.filename}' not found. Please upload it.")
+        else:
+            raise HTTPException(status_code=500, detail="Error loading the index. It may be corrupted.")
+
+    # 2. Define the RAG prompt template
+    template = """
+    Answer the question based ONLY on the following context.
+    Explain the answer in simple, plain English, as if talking to a non-lawyer.
+    If the context does not contain the answer, state that you cannot find the answer in the document.
+
+    Context:
+    {context}
+
+    Question: {question}
+
+    Answer:
+    """
+    prompt = ChatPromptTemplate.from_template(template)
+
+    # 3. Define a function to format retrieved documents
+    def format_docs(docs):
+        return "\n\n".join(doc.page_content for doc in docs)
     
-    # Create query engine with custom prompt
-    query_engine = index.as_query_engine(
-        similarity_top_k=5,
-        response_mode=ResponseMode.COMPACT,
+    # 4. Build the RAG chain using LCEL
+    rag_chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
     )
     
-    # Enhanced prompt for plain English explanations
-    enhanced_question = f"""
-    Based solely on the legal document provided, answer the following question in plain, simple English that a non-lawyer can understand.
-    Avoid legal jargon where possible, and if you must use legal terms, explain them clearly.
-    If the document doesn't contain information to answer the question, say so clearly.
-    
-    Question: {request.question}
-    
-    Provide a clear, concise answer:
-    """
-    
     try:
-        # Query the index
-        response = query_engine.query(enhanced_question)
+        # First, retrieve documents to get sources separately.
+        # Note: This runs the retriever, and the chain will run it again. For this app,
+        # the performance impact is negligible, but for production it could be optimized.
+        source_docs = retriever.invoke(request.question)
+        sources = [doc.page_content[:150] + "..." for doc in source_docs]
+
+        # 5. Invoke the chain to get the answer
+        answer = rag_chain.invoke(request.question)
         
-        # Extract source nodes for transparency
-        sources = []
-        if hasattr(response, 'source_nodes'):
-            for node in response.source_nodes[:3]:  # Limit to top 3 sources
-                if hasattr(node, 'text'):
-                    sources.append(node.text[:150] + "...")  # Truncate for readability
-        
-        return AnswerResponse(
-            answer=str(response),
-            sources=sources
-        )
+        return AnswerResponse(answer=answer, sources=sources)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error querying document: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
+
+# --- Add the new Pydantic model with the others ---
+
+class RiskAnalysis(BaseModel):
+    """A list of identified risk clauses from the document."""
+    risks: List[RiskClause]
+
+# --- Then, update the /scan endpoint like this ---
+
+
+
+
 
 @app.post("/scan", response_model=ScanResponse)
 async def scan_for_risks(request: ScanRequest):
-    """Scan document for risky or important clauses"""
-    # Get document text
     file_path = UPLOAD_DIR / request.filename
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail=f"Document '{request.filename}' not found")
+        raise HTTPException(status_code=404, detail=f"Document '{request.filename}' not found.")
     
     try:
-        text = process_document(file_path, request.filename)
+        text = extract_text(file_path)
+        
+        # Split text into manageable chunks if it's too long
+        max_chunk_size = 10000
+        text_chunks = []
+        
+        if len(text) > max_chunk_size:
+            # Split into overlapping chunks to avoid missing clauses that span boundaries
+            for i in range(0, len(text), max_chunk_size - 500):  # 500 char overlap
+                chunk = text[i:i + max_chunk_size]
+                text_chunks.append(chunk)
+        else:
+            text_chunks = [text]
+        
+        all_risks = []
+        
+        # Process each chunk
+        for chunk in text_chunks:
+            # Use a more direct prompt approach instead of structured output
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", """You are an expert legal analyst. Analyze the document text and identify potentially risky legal clauses.
+
+For each risky clause you find, provide:
+1. clause_type: The type (e.g., "Indemnification", "Limitation of Liability", "Termination", "Arbitration", "Non-Compete", "Force Majeure")
+2. text: The exact clause text (first 200 characters only)
+3. explanation: Plain English explanation of the risk
+4. severity: "high", "medium", or "low"
+
+Format your response as a JSON array of objects. Example:
+[
+  {
+    "clause_type": "Indemnification",
+    "text": "Party A shall indemnify and hold harmless Party B from any claims...",
+    "explanation": "This clause makes you responsible for covering legal costs and damages, which could be expensive.",
+    "severity": "high"
+  }
+]
+
+If no risky clauses are found, return an empty array: []"""),
+                ("human", "Analyze this document text for risky legal clauses:\n\n{document_text}")
+            ])
+            
+            chain = prompt | llm | StrOutputParser()
+            
+            try:
+                # Get the response from the LLM
+                response = chain.invoke({"document_text": chunk})
+                
+                # Clean up the response to ensure it's valid JSON
+                response = response.strip()
+                if response.startswith("```json"):
+                    response = response[7:]
+                if response.endswith("```"):
+                    response = response[:-3]
+                response = response.strip()
+                
+                # Parse JSON response
+                import json
+                try:
+                    chunk_risks = json.loads(response)
+                    
+                    # Validate and convert to RiskClause objects
+                    for risk_data in chunk_risks:
+                        try:
+                            # Ensure all required fields are present with defaults
+                            risk_clause = RiskClause(
+                                clause_type=risk_data.get("clause_type", "Unknown"),
+                                text=risk_data.get("text", "")[:200],  # Truncate to 200 chars
+                                explanation=risk_data.get("explanation", "No explanation provided"),
+                                severity=risk_data.get("severity", "medium").lower()
+                            )
+                            
+                            # Validate severity
+                            if risk_clause.severity not in ["high", "medium", "low"]:
+                                risk_clause.severity = "medium"
+                                
+                            all_risks.append(risk_clause)
+                        except Exception as e:
+                            print(f"Error parsing individual risk: {e}")
+                            continue
+                            
+                except json.JSONDecodeError as e:
+                    print(f"JSON decode error: {e}")
+                    print(f"Raw response: {response}")
+                    # Try to extract information using a fallback method
+                    fallback_risks = parse_fallback_response(response)
+                    all_risks.extend(fallback_risks)
+                    
+            except Exception as e:
+                print(f"Error processing chunk: {e}")
+                continue
+        
+        # Remove duplicates based on clause_type and first 50 chars of text
+        unique_risks = []
+        seen = set()
+        
+        for risk in all_risks:
+            identifier = f"{risk.clause_type}_{risk.text[:50]}"
+            if identifier not in seen:
+                seen.add(identifier)
+                unique_risks.append(risk)
+        
+        return ScanResponse(risks=unique_risks, total_risks=len(unique_risks))
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reading document: {str(e)}")
-    
-    # Identify risky clauses
-    try:
-        risks = identify_risky_clauses(text)
-        return ScanResponse(
-            risks=risks,
-            total_risks=len(risks)
-        )
-    except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error scanning document: {str(e)}")
+
+def parse_fallback_response(response: str) -> List[RiskClause]:
+    """Fallback parser when JSON parsing fails"""
+    risks = []
+    
+    # Common risk clause patterns
+    risk_patterns = [
+        "indemnif", "liable", "liability", "terminate", "termination", 
+        "arbitrat", "non-compete", "force majeure", "breach", "default",
+        "liquidated damages", "penalty", "confidential", "non-disclosure"
+    ]
+    
+    lines = response.split('\n')
+    for line in lines:
+        line_lower = line.lower()
+        for pattern in risk_patterns:
+            if pattern in line_lower and len(line.strip()) > 10:
+                risk = RiskClause(
+                    clause_type="Identified Risk",
+                    text=line.strip()[:200],
+                    explanation="Potential legal risk identified in document",
+                    severity="medium"
+                )
+                risks.append(risk)
+                break  # Only add once per line
+    
+    return risks[:5]  # Limit fallback results
+
 
 @app.get("/documents")
 async def list_documents():
-    """List all uploaded documents"""
-    documents = []
-    for file_path in UPLOAD_DIR.glob("*"):
-        if file_path.is_file():
-            documents.append({
-                "filename": file_path.name,
-                "size": file_path.stat().st_size,
-                "uploaded_at": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
-            })
-    return {"documents": documents}
+    return {
+        "documents": [
+            {"filename": f.name, "size": f.stat().st_size, "uploaded_at": datetime.fromtimestamp(f.stat().st_mtime).isoformat()}
+            for f in UPLOAD_DIR.glob("*") if f.is_file()
+        ]
+    }
 
 @app.delete("/documents/{filename}")
 async def delete_document(filename: str):
-    """Delete an uploaded document and its index"""
     file_path = UPLOAD_DIR / filename
-    
-    # Delete file
     if file_path.exists():
         file_path.unlink()
-    
-    # Delete from indices
-    if filename in document_indices:
-        del document_indices[filename]
-    
-    # Delete ChromaDB collection
-    collection_name = hashlib.md5(filename.encode()).hexdigest()[:63]
+        
+    collection_name = get_collection_name(filename)
     try:
         chroma_client.delete_collection(name=collection_name)
-    except:
-        pass  # Collection might not exist
-    
-    return {"message": f"Document '{filename}' deleted successfully"}
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "api_key_set": bool(GOOGLE_API_KEY),
-        "upload_dir_exists": UPLOAD_DIR.exists(),
-        "chroma_dir_exists": CHROMA_DIR.exists()
-    }
+    except ValueError:
+        pass
+        
+    return {"message": f"Document '{filename}' and its index deleted."}
 
 if __name__ == "__main__":
     import uvicorn

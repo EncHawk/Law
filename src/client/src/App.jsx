@@ -138,40 +138,72 @@ const App = () => {
   };
 
   const handleScanForRisks = async () => {
-    if (!uploadedFileName) {
-      setError('Please upload a document first');
-      return;
-    }
+  if (!uploadedFileName) {
+    setError('Please upload a document first');
+    return;
+  }
 
-    setIsScanning(true);
-    setError('');
-    setRisks([]);
+  setIsScanning(true);
+  setError('');
+  setRisks([]);
 
-    try {
-      const response = await fetch(`${API_URL}/scan`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          filename: uploadedFileName,
-        }),
-      });
+  try {
+    console.log('Scanning document:', uploadedFileName); // Debug log
+    
+    const response = await fetch(`${API_URL}/scan`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        filename: uploadedFileName,
+      }),
+    });
 
-      const data = await response.json();
+    console.log('Response status:', response.status); // Debug log
+    
+    const data = await response.json();
+    console.log('Response data:', data); // Debug log
 
-      if (response.ok) {
-        setRisks(data.risks || []);
-        setActiveTab('risks');
+    if (response.ok) {
+      // More defensive parsing of the response
+      const risksArray = data.risks || data.risk_clauses || [];
+      console.log('Parsed risks array:', risksArray); // Debug log
+      
+      if (Array.isArray(risksArray)) {
+        // Ensure each risk object has all required properties
+        const validRisks = risksArray.filter(risk => 
+          risk && typeof risk === 'object' && risk.clause_type
+        ).map(risk => ({
+          clause_type: risk.clause_type || 'Unknown',
+          text: risk.text || '',
+          explanation: risk.explanation || 'No explanation provided',
+          severity: (risk.severity || 'medium').toLowerCase()
+        }));
+        
+        console.log('Valid risks after processing:', validRisks); // Debug log
+        setRisks(validRisks);
+        
+        if (validRisks.length > 0) {
+          setActiveTab('risks');
+        } else {
+          setError('No risks found in the document');
+        }
       } else {
-        setError(data.detail || 'Failed to scan document');
+        console.error('Risks data is not an array:', risksArray);
+        setError('Invalid response format: risks should be an array');
       }
-    } catch (err) {
-      setError('Failed to scan document. Please ensure the backend is running.');
-    } finally {
-      setIsScanning(false);
+    } else {
+      console.error('API error:', data);
+      setError(data.detail || 'Failed to scan document');
     }
-  };
+  } catch (err) {
+    console.error('Scan error:', err);
+    setError('Failed to scan document. Please ensure the backend is running.');
+  } finally {
+    setIsScanning(false);
+  }
+};
 
   const handleSelectDocument = (filename) => {
     setUploadedFileName(filename);
@@ -487,95 +519,115 @@ const App = () => {
 
         {/* Risk Analysis Section */}
         {activeTab === 'risks' && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-semibold text-gray-900 flex items-center">
-                <AlertTriangle className="w-5 h-5 mr-2 text-indigo-600" />
-                Risk Analysis
-              </h2>
-              {uploadedFileName && (
-                <button
-                  onClick={handleScanForRisks}
-                  disabled={isScanning}
-                  className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center text-sm"
-                >
-                  {isScanning ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Scanning...
-                    </>
-                  ) : (
-                    <>
-                      <Shield className="w-4 h-4 mr-2" />
-                      Scan for Risks
-                    </>
-                  )}
-                </button>
-              )}
-            </div>
-
-            {!uploadedFileName ? (
-              <div className="text-center py-12">
-                <AlertTriangle className="w-16 h-16 mx-auto text-gray-300 mb-4" />
-                <p className="text-gray-500">Please upload a document first to scan for risks</p>
-              </div>
-            ) : risks.length === 0 ? (
-              <div className="text-center py-12">
-                <Shield className="w-16 h-16 mx-auto text-gray-300 mb-4" />
-                <p className="text-gray-500">
-                  Click "Scan for Risks" to identify important clauses in your document
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="bg-blue-50 rounded-lg p-3 mb-4">
-                  <p className="text-sm text-blue-800">
-                    Found <span className="font-semibold">{risks.length}</span> important clauses to review
-                  </p>
-                </div>
-                
-                {risks.map((risk, idx) => (
-                  <div
-                    key={idx}
-                    className={`border rounded-lg p-4 space-y-3 ${getSeverityColor(risk.severity)}`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center space-x-2">
-                        {getSeverityIcon(risk.severity)}
-                        <h3 className="font-medium">{risk.clause_type}</h3>
-                      </div>
-                      <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                        risk.severity === 'high' ? 'bg-red-200' :
-                        risk.severity === 'medium' ? 'bg-yellow-200' :
-                        'bg-blue-200'
-                      }`}>
-                        {risk.severity?.toUpperCase()}
-                      </span>
-                    </div>
-                    
-                    {risk.text && (
-                      <div className="bg-white bg-opacity-50 rounded p-2">
-                        <p className="text-xs text-gray-700 italic">"{risk.text}"</p>
-                      </div>
-                    )}
-                    
-                    <div>
-                      <p className="text-sm font-medium mb-1">What this means:</p>
-                      <p className="text-sm leading-relaxed">{risk.explanation}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-lg font-semibold text-gray-900 flex items-center">
+              <AlertTriangle className="w-5 h-5 mr-2 text-indigo-600" />
+              Risk Analysis
+            </h2>
+            {uploadedFileName && (
+              <button
+                onClick={handleScanForRisks}
+                disabled={isScanning}
+                className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center text-sm"
+              >
+                {isScanning ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Scanning...
+                  </>
+                ) : (
+                  <>
+                    <Shield className="w-4 h-4 mr-2" />
+                    Scan for Risks
+                  </>
+                )}
+              </button>
             )}
           </div>
-        )}
+
+          {!uploadedFileName ? (
+            <div className="text-center py-12">
+              <AlertTriangle className="w-16 h-16 mx-auto text-gray-300 mb-4" />
+              <p className="text-gray-500">Please upload a document first to scan for risks</p>
+            </div>
+          ) : risks.length === 0 && !isScanning ? (
+            <div className="text-center py-12">
+              <Shield className="w-16 h-16 mx-auto text-gray-300 mb-4" />
+              <p className="text-gray-500">
+                Click "Scan for Risks" to identify important clauses in your document
+              </p>
+            </div>
+          ) : isScanning ? (
+            <div className="text-center py-12">
+              <Loader2 className="w-16 h-16 mx-auto text-indigo-300 mb-4 animate-spin" />
+              <p className="text-gray-500">Analyzing document for risks...</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-blue-50 rounded-lg p-3 mb-4">
+                <p className="text-sm text-blue-800">
+                  Found <span className="font-semibold">{risks.length}</span> important clause{risks.length !== 1 ? 's' : ''} to review
+                </p>
+              </div>
+              
+              {risks.map((risk, idx) => (
+                <div
+                  key={`${risk.clause_type}-${idx}`}
+                  className={`border rounded-lg p-4 space-y-3 ${getSeverityColor(risk.severity)}`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center space-x-2">
+                      {getSeverityIcon(risk.severity)}
+                      <h3 className="font-medium">{risk.clause_type || 'Unknown Clause'}</h3>
+                    </div>
+                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                      risk.severity === 'high' ? 'bg-red-200' :
+                      risk.severity === 'medium' ? 'bg-yellow-200' :
+                      'bg-blue-200'
+                    }`}>
+                      {(risk.severity || 'medium').toUpperCase()}
+                    </span>
+                  </div>
+                  
+                  {risk.text && risk.text.trim() && (
+                    <div className="bg-white bg-opacity-50 rounded p-2">
+                      <p className="text-xs text-gray-700 italic">"{risk.text}"</p>
+                    </div>
+                  )}
+                  
+                  <div>
+                    <p className="text-sm font-medium mb-1">What this means:</p>
+                    <p className="text-sm leading-relaxed">
+                      {risk.explanation || 'No explanation available'}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              
+              {/* Debug information (remove in production) */}
+              {process.env.NODE_ENV === 'development' && (
+                <div className="mt-8 p-4 bg-gray-100 rounded-lg">
+                  <details>
+                    <summary className="text-sm font-medium cursor-pointer">Debug Info</summary>
+                    <pre className="mt-2 text-xs overflow-auto">
+                      {JSON.stringify(risks, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       </main>
 
       {/* Footer */}
       <footer className="mt-16 border-t border-gray-200 bg-white">
         <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
           <p className="text-center text-sm text-gray-500">
-            Legal Translator AI • Powered by Google Gemini & RAG Technology
+            LawBuddy, your one stop solution for all contracts.
+            made by <a href="https://x.com/d_leap07" target="_blank">Dilip Kumar R</a>
           </p>
         </div>
       </footer>

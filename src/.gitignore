@@ -1,1 +1,10 @@
 .env
+__pycache__
+uploads
+new_env
+Include
+Lib
+Scripts
+share
+pyenv.config
+chroma_db
