@@ -36,6 +36,8 @@ from chromadb.config import Settings as ChromaSettings
 
 load_dotenv()
 
+PORT = int(os.getenv("PORT", 8000))
+
 # --- Environment and App Setup ---
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
@@ -44,7 +46,10 @@ if not GOOGLE_API_KEY:
 app = FastAPI(title="Legal Translator AI", version="2.1.0-fixed")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"], 
+    allow_credentials=True, 
+    allow_methods=["*"], 
+    allow_headers=["*"],
 )
 
 # --- Directory and DB Initialization ---
@@ -427,4 +432,5 @@ async def delete_document(filename: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
