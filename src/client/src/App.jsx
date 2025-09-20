@@ -246,9 +246,9 @@ const App = () => {
         <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
-              <FileText className="w-8 h-8 text-indigo-600" />
+              <FileText className="w-8 h-8 text-blue-600" />
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">ClauseBuddy</h1>
+                <h1 className="text-2xl font-bold bg-gradient-to-r from-cyan-500 via-blue-400 to-cyan-300 text-transparent bg-clip-text">ClauseBuddy</h1>
                 <p className="text-sm text-gray-600">Say NO hidden clauses! TRY NOW.</p>
               </div>
             </div>
@@ -629,7 +629,9 @@ const App = () => {
         <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
           <p className="text-center text-sm text-gray-500">
             ClauseBuddy, your one stop solution for all contracts.
-            made by <a href="https://x.com/d_leap07" target="_blank">Dilip Kumar R</a>
+            made by <a href="https://x.com/d_leap07" className=' px-2 py-1 rounded-lg bg-gradient-to-r from-blue-200
+              via-yellow-400  to-green-300 
+            text-black' target="_blank">Dilip Kumar R</a>
           </p>
         </div>
       </footer>
