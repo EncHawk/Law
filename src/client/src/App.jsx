@@ -248,8 +248,8 @@ const App = () => {
             <div className="flex items-center space-x-3">
               <FileText className="w-8 h-8 text-indigo-600" />
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Legal Translator AI</h1>
-                <p className="text-sm text-gray-600">Understand legal documents in plain English</p>
+                <h1 className="text-2xl font-bold text-gray-900">ClauseBuddy</h1>
+                <p className="text-sm text-gray-600">Say NO hidden clauses! TRY NOW.</p>
               </div>
             </div>
             {uploadedFileName && (
@@ -628,7 +628,7 @@ const App = () => {
       <footer className="mt-16 border-t border-gray-200 bg-white">
         <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
           <p className="text-center text-sm text-gray-500">
-            LawBuddy, your one stop solution for all contracts.
+            ClauseBuddy, your one stop solution for all contracts.
             made by <a href="https://x.com/d_leap07" target="_blank">Dilip Kumar R</a>
           </p>
         </div>
