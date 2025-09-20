@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, FileText, AlertTriangle, HelpCircle, CheckCircle, X, Loader2, Send, Shield, AlertCircle } from 'lucide-react';
-import dotenv from 'dotenv'
-load_env().config;
-const API_URL = process.env.NODE_ENV === 'production' 
+
+const API_URL = import.meta.env.PROD
   ? 'https://law-nhjj.onrender.com'  // Your actual Render URL
-  : 'http://localhost:8000';
+  : import.meta.env.DEV_API_URL;
 
 const App = () => {
   const [selectedFile, setSelectedFile] = useState(null);
