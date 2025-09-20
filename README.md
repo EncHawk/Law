@@ -11,37 +11,23 @@ Risk Analysis: Automatically scan your document to identify and explain importan
 Tech Stack
 This project is a monorepo containing a separate frontend and backend.
 
-Area
+Area: Technology
 
-Technology
+Frontend : React (with Vite), Tailwind CSS
 
-Frontend
+Backend : Python, FastAPI
 
-React (with Vite), Tailwind CSS
+LLM, embedding : Google Gemini 1.5 Flash, LangChain
 
-Backend
+Database :ChromaDB (Vector Store)
 
-Python, FastAPI
-
-AI/ML
-
-Google Gemini 1.5 Flash, LangChain
-
-Database
-
-ChromaDB (Vector Store)
-
-Deployment
-
-Frontend on Vercel, Backend on Render
+Deployment : Frontend on Vercel, Backend on Render
 
 Getting Started
-Prerequisites
-Python 3.9+
-
-Node.js v18+
-
-A Google Gemini API Key.
+    Prerequisites
+    Python 3.9+
+    Node.js v18+
+    A Google Gemini API Key.
 
 1. Backend Setup
 # Navigate to the backend directory
