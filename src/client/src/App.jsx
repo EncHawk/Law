@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, FileText, AlertTriangle, HelpCircle, CheckCircle, X, Loader2, Send, Shield, AlertCircle } from 'lucide-react';
 import dotenv from 'dotenv'
-import { SpeedInsights } from "@vercel/speed-insights/next"
 load_env().config;
 const API_URL = process.env.NODE_ENV === 'production' 
   ? 'https://law-nhjj.onrender.com'  // Your actual Render URL
